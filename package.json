@@ -1,0 +1,53 @@
+{
+  "workspaces": [
+    "apps/*"
+  ],
+  "devDependencies": {
+    "eslint": "^9.27.0",
+    "oxfmt": "^0.61.0",
+    "oxlint": "^1.50.0",
+    "typescript-eslint": "^8.33.0"
+  },
+  "resolutions": {
+    "@expo/vector-icons": "^15.0.2",
+    "@react-native-community/netinfo": "patch:@react-native-community/netinfo@npm%3A12.0.1#~/.yarn/patches/@react-native-community+netinfo+12.0.1.patch",
+    "@react-native-masked-view/masked-view": "0.3.2",
+    "@sentry/react-native": "~7.11.0",
+    "@shopify/flash-list": "2.0.2",
+    "expo": "57.0.23",
+    "expo-apple-authentication": "~57.0.2",
+    "expo-auth-session": "~57.0.12",
+    "expo-blur": "~57.0.3",
+    "expo-clipboard": "~57.0.2",
+    "expo-file-system": "~57.0.7",
+    "expo-font": "~57.0.4",
+    "expo-glass-effect": "~57.0.3",
+    "expo-haptics": "~57.0.3",
+    "expo-image": "~57.0.5",
+    "expo-image-picker": "~57.0.18",
+    "expo-linear-gradient": "~57.0.2",
+    "expo-mail-composer": "~57.0.2",
+    "expo-media-library": "~57.0.5",
+    "expo-router": "patch:expo-router@npm%3A57.0.21#~/.yarn/patches/expo-router+57.0.21.patch",
+    "expo-secure-store": "~57.0.4",
+    "expo-speech-recognition": "~57.0.0",
+    "expo-status-bar": "~57.0.1",
+    "expo-store-review": "patch:expo-store-review@npm%3A57.0.3#~/.yarn/patches/expo-store-review+57.0.3.patch",
+    "expo-video": "~57.0.4",
+    "expo-web-browser": "~57.0.3",
+    "framer-motion": "12.40.0",
+    "lottie-react-native": "~7.3.8",
+    "motion": "12.40.0",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-gesture-handler": "~2.32.0",
+    "react-native-keyboard-controller": "~1.22.5",
+    "react-native-reanimated": "4.5.1",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "~4.26.0",
+    "react-native-svg": "15.15.4",
+    "react-native-webview": "13.16.1"
+  },
+  "packageManager": "yarn@4.12.0"
+}
