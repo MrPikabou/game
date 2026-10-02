@@ -1,180 +1,338 @@
 /**
- * TURRET MODULE LAB
- * Configure each turret's module slots, upgrade mods, and prestige.
+ * TURRET WORKSHOP
+ * Shows 4 turret cards. Tap one to configure its module slots.
+ * Module slots show type badge (X/V/C/E/O) and power cost.
  */
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Modal } from 'react-native';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  ScrollView,
+  Modal,
+  FlatList,
+  Dimensions,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useGameStore, TurretType } from '@/utils/gameStore';
+import { useGameStore, TurretType, getUsedPower } from '@/utils/gameStore';
 import { TURRET_DEFS, getTurretStats } from '@/utils/gameConfig';
 import {
-  getModulesFor,
   getModuleDef,
+  getModulesFor,
   SlotType,
-  ModuleDef,
-  calcModuleCost,
+  calcPowerCost,
   RARITY_COLOR,
   RARITY_LABEL,
+  ModuleInstance,
 } from '@/utils/modules';
-import { ArrowUp, TrendingUp, X, ChevronRight, Lock } from 'lucide-react-native';
+import { ArrowUp, TrendingUp, X, Zap, Lock } from 'lucide-react-native';
 import { MotiView } from 'moti';
 
-const SLOT_TYPE_COLORS: Record<SlotType, string> = {
+const { width } = Dimensions.get('window');
+
+const SLOT_CLR: Record<SlotType, string> = {
   X: '#ef4444',
   V: '#3b82f6',
   C: '#22d3ee',
   E: '#f59e0b',
   O: '#10b981',
 };
-
-const SLOT_TYPE_LABELS: Record<SlotType, string> = {
-  X: 'X – Offensive',
-  V: 'V – Velocity',
-  C: 'C – Control',
-  E: 'E – Exotic',
-  O: 'O – Utility',
+const SLOT_LBL: Record<SlotType, string> = {
+  X: 'Offensive',
+  V: 'Velocity',
+  C: 'Control',
+  E: 'Exotic',
+  O: 'Utility',
 };
-
-const ALL_TURRET_TYPES: TurretType[] = ['cannon', 'laser', 'missile', 'tesla'];
-const PRESTIGE_SLOT_TYPES: SlotType[] = ['X', 'V', 'C', 'E', 'O'];
+const ALL_TYPES: TurretType[] = ['cannon', 'laser', 'missile', 'tesla'];
+const PRESTIGE_TYPES: SlotType[] = ['X', 'V', 'C', 'E', 'O'];
 
 // ─────────────────────────────────────────────────────────────
-export default function TurretLabScreen() {
+export default function TurretWorkshop() {
   const insets = useSafeAreaInsets();
-  const { gold, turretBuilds, ownedModules, setTurretModSlot, upgradeTurretMod, prestigeTurret } =
-    useGameStore();
+  const {
+    gold,
+    ownedModules,
+    turretBuilds,
+    setTurretSlotInstance,
+    upgradeTurretSlotModule,
+    prestigeTurret,
+  } = useGameStore();
 
-  const [selectedTurret, setSelectedTurret] = useState<TurretType>('cannon');
-  const [selectedSlotIdx, setSelectedSlotIdx] = useState<number | null>(null);
+  const [activeTurret, setActiveTurret] = useState<TurretType | null>(null);
+  const [activeSlot, setActiveSlot] = useState<number | null>(null);
   const [showModPicker, setShowModPicker] = useState(false);
   const [showPrestige, setShowPrestige] = useState(false);
-  const [pickedSlotType, setPickedSlotType] = useState<SlotType>('X');
+  const [newSlotType, setNewSlotType] = useState<SlotType>('X');
 
-  const build = turretBuilds[selectedTurret];
-  const def = TURRET_DEFS[selectedTurret];
-  const stats = getTurretStats(selectedTurret, build.level);
-  const isMaxLevel = build.level >= build.maxLevel;
-  const xpProgress = (build.xp / (build.level * 200)) * 100;
+  // ── Derived state ────────────────────────────────────────
+  const build = activeTurret ? turretBuilds[activeTurret] : null;
+  const def = activeTurret ? TURRET_DEFS[activeTurret] : null;
+  const stats = activeTurret && build ? getTurretStats(activeTurret, build.level) : null;
+  const usedPower = build ? getUsedPower(build, ownedModules) : 0;
 
-  // Modules this turret can use
-  const eligibleMods = getModulesFor(selectedTurret);
+  // Mods available for active turret
+  const eligibleDefs = activeTurret ? getModulesFor(activeTurret) : [];
+  const ownedEligible = eligibleDefs.filter((d) => ownedModules.some((o) => o.defId === d.id));
 
-  // ── Equip a module into the selected slot ──────────────────
-  const handlePickModule = (modDef: ModuleDef) => {
-    if (selectedSlotIdx === null) return;
-    // If already equipped in this slot, unequip; otherwise equip
-    const slot = build.slots[selectedSlotIdx];
-    const newId = slot.moduleDefId === modDef.id ? null : modDef.id;
-    setTurretModSlot(selectedTurret, selectedSlotIdx, newId);
+  const handleEquip = (inst: ModuleInstance) => {
+    if (activeTurret === null || activeSlot === null) return;
+    const curSlot = build!.slots[activeSlot];
+    // If same instance → unequip
+    const newId = curSlot.instanceId === inst.instanceId ? null : inst.instanceId;
+    setTurretSlotInstance(activeTurret, activeSlot, newId);
     setShowModPicker(false);
-    setSelectedSlotIdx(null);
+    setActiveSlot(null);
   };
 
-  // ── Upgrade the module in a slot ──────────────────────────
-  const handleUpgrade = (slotIdx: number) => {
-    upgradeTurretMod(selectedTurret, slotIdx);
-  };
-
-  // ── Prestige the turret ───────────────────────────────────
   const handlePrestige = () => {
-    prestigeTurret(selectedTurret, pickedSlotType);
+    if (!activeTurret) return;
+    prestigeTurret(activeTurret, newSlotType);
     setShowPrestige(false);
   };
 
-  return (
-    <View style={{ flex: 1, backgroundColor: '#050505', paddingTop: insets.top }}>
-      {/* ── TURRET SELECTOR TABS ─────────────────────────────── */}
-      <View style={{ paddingHorizontal: 16, paddingTop: 16 }}>
-        <Text
-          style={{ color: '#fff', fontSize: 22, fontFamily: 'Inter_900Black', marginBottom: 14 }}
+  // ── GRID VIEW (no turret selected) ──────────────────────
+  if (!activeTurret) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#050505', paddingTop: insets.top }}>
+        <View style={{ paddingHorizontal: 20, paddingTop: 16, paddingBottom: 8 }}>
+          <Text
+            style={{ color: '#fff', fontSize: 22, fontFamily: 'Inter_900Black', marginBottom: 4 }}
+          >
+            TURRET WORKSHOP
+          </Text>
+          <Text style={{ color: '#475569', fontSize: 12, fontFamily: 'Inter_700Bold' }}>
+            TAP A TURRET TO CONFIGURE ITS MODULES
+          </Text>
+        </View>
+        <ScrollView
+          contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+          showsVerticalScrollIndicator={false}
         >
-          TURRET LAB
-        </Text>
-        <View style={{ flexDirection: 'row', gap: 8, marginBottom: 16 }}>
-          {ALL_TURRET_TYPES.map((tt) => {
-            const d = TURRET_DEFS[tt];
-            const active = selectedTurret === tt;
-            const b = turretBuilds[tt];
-            return (
-              <TouchableOpacity
-                key={tt}
-                onPress={() => {
-                  setSelectedTurret(tt);
-                  setSelectedSlotIdx(null);
-                }}
-                style={{
-                  flex: 1,
-                  paddingVertical: 10,
-                  backgroundColor: active ? d.color : '#0f172a',
-                  borderRadius: 10,
-                  borderWidth: 2,
-                  borderColor: active ? d.accentColor : '#1e293b',
-                  alignItems: 'center',
-                }}
-              >
-                <Text style={{ fontSize: 18 }}>{d.icon}</Text>
-                <Text
+          {/* 2×2 grid */}
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
+            {ALL_TYPES.map((tt) => {
+              const d = TURRET_DEFS[tt];
+              const b = turretBuilds[tt];
+              const used = getUsedPower(b, ownedModules);
+              const pct = (used / b.maxPower) * 100;
+              const filledSlots = b.slots.filter((s) => s.instanceId).length;
+              return (
+                <TouchableOpacity
+                  key={tt}
+                  onPress={() => setActiveTurret(tt)}
                   style={{
-                    color: active ? d.accentColor : '#475569',
-                    fontSize: 8,
-                    fontFamily: 'Inter_900Black',
-                    marginTop: 2,
+                    width: (width - 44) / 2,
+                    backgroundColor: '#0a111e',
+                    borderRadius: 16,
+                    padding: 16,
+                    borderWidth: 2,
+                    borderColor: d.accentColor + '55',
                   }}
                 >
-                  LV.{b.level}
-                </Text>
-                {b.prestigeLevel > 0 && (
-                  <View style={{ position: 'absolute', top: 4, right: 4 }}>
-                    <Text style={{ fontSize: 8 }}>⭐</Text>
+                  {/* Icon + name */}
+                  <View
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 10,
+                      marginBottom: 12,
+                    }}
+                  >
+                    <View
+                      style={{
+                        width: 42,
+                        height: 42,
+                        borderRadius: 10,
+                        backgroundColor: d.color,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        borderWidth: 2,
+                        borderColor: d.accentColor,
+                      }}
+                    >
+                      <Text style={{ fontSize: 20 }}>{d.icon}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text
+                        style={{ color: d.accentColor, fontSize: 14, fontFamily: 'Inter_900Black' }}
+                      >
+                        {d.name}
+                      </Text>
+                      <Text style={{ color: '#334155', fontSize: 9, fontFamily: 'Inter_700Bold' }}>
+                        LV.{b.level} {b.prestigeLevel > 0 ? `· P${b.prestigeLevel}⭐` : ''}
+                      </Text>
+                    </View>
                   </View>
-                )}
-              </TouchableOpacity>
-            );
-          })}
-        </View>
+
+                  {/* Power bar */}
+                  <Text
+                    style={{
+                      color: '#334155',
+                      fontSize: 9,
+                      fontFamily: 'Inter_700Bold',
+                      marginBottom: 4,
+                    }}
+                  >
+                    POWER {used}/{b.maxPower}
+                  </Text>
+                  <View
+                    style={{
+                      height: 5,
+                      backgroundColor: '#0f172a',
+                      borderRadius: 3,
+                      overflow: 'hidden',
+                      marginBottom: 10,
+                    }}
+                  >
+                    <View
+                      style={{
+                        height: '100%',
+                        width: `${pct}%` as `${number}%`,
+                        backgroundColor: pct > 85 ? '#ef4444' : d.accentColor,
+                        borderRadius: 3,
+                      }}
+                    />
+                  </View>
+
+                  {/* Module slot pips */}
+                  <View style={{ flexDirection: 'row', gap: 4 }}>
+                    {b.slots.map((sl, i) => (
+                      <View
+                        key={i}
+                        style={{
+                          flex: 1,
+                          height: 18,
+                          borderRadius: 4,
+                          borderWidth: 1,
+                          borderColor: SLOT_CLR[sl.type],
+                          backgroundColor: sl.instanceId ? SLOT_CLR[sl.type] + '44' : 'transparent',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        <Text
+                          style={{
+                            color: SLOT_CLR[sl.type],
+                            fontSize: 7,
+                            fontFamily: 'Inter_900Black',
+                          }}
+                        >
+                          {sl.type}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+
+                  <Text style={{ color: '#334155', fontSize: 9, marginTop: 8 }}>
+                    {filledSlots}/{b.slots.length} slots filled
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          {/* Gold indicator */}
+          <View style={{ marginTop: 16, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Zap size={13} color="#fbbf24" />
+            <Text style={{ color: '#fbbf24', fontSize: 12, fontFamily: 'Inter_700Bold' }}>
+              {gold.toLocaleString()} GOLD AVAILABLE
+            </Text>
+          </View>
+        </ScrollView>
+      </View>
+    );
+  }
+
+  // ── DETAIL VIEW (turret selected) ────────────────────────
+  return (
+    <View style={{ flex: 1, backgroundColor: '#050505', paddingTop: insets.top }}>
+      {/* Back header */}
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          paddingHorizontal: 16,
+          paddingTop: 14,
+          paddingBottom: 10,
+          gap: 12,
+        }}
+      >
+        <TouchableOpacity
+          onPress={() => {
+            setActiveTurret(null);
+            setActiveSlot(null);
+          }}
+          style={{
+            backgroundColor: '#0f172a',
+            borderRadius: 10,
+            padding: 9,
+            borderWidth: 1,
+            borderColor: '#1e293b',
+          }}
+        >
+          <X size={18} color="#fff" />
+        </TouchableOpacity>
+        <Text style={{ color: '#fff', fontSize: 18, fontFamily: 'Inter_900Black', flex: 1 }}>
+          {def!.icon} {def!.name} WORKSHOP
+        </Text>
+        <Text style={{ color: '#fbbf24', fontSize: 11, fontFamily: 'Inter_700Bold' }}>
+          {gold.toLocaleString()}g
+        </Text>
       </View>
 
       <ScrollView
-        style={{ flex: 1 }}
-        contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 30 }}
+        contentContainerStyle={{ padding: 16, paddingBottom: 50 }}
         showsVerticalScrollIndicator={false}
       >
-        {/* ── TURRET STAT CARD ─────────────────────────────────── */}
+        {/* Turret stat card */}
         <View
           style={{
-            backgroundColor: def.color + '33',
+            backgroundColor: def!.color + '33',
             borderRadius: 14,
             padding: 16,
             borderWidth: 2,
-            borderColor: def.accentColor + '55',
+            borderColor: def!.accentColor + '55',
             marginBottom: 20,
           }}
         >
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-            <Text style={{ fontSize: 36, marginRight: 14 }}>{def.icon}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14 }}>
+            <View
+              style={{
+                width: 52,
+                height: 52,
+                borderRadius: 12,
+                backgroundColor: def!.color,
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderWidth: 2,
+                borderColor: def!.accentColor,
+                marginRight: 14,
+              }}
+            >
+              <Text style={{ fontSize: 26 }}>{def!.icon}</Text>
+            </View>
             <View style={{ flex: 1 }}>
-              <Text style={{ color: def.accentColor, fontSize: 18, fontFamily: 'Inter_900Black' }}>
-                {def.name}
+              <Text style={{ color: def!.accentColor, fontSize: 18, fontFamily: 'Inter_900Black' }}>
+                {def!.name}
               </Text>
-              <Text style={{ color: '#64748b', fontSize: 11, fontFamily: 'Inter_700Bold' }}>
-                {def.description}
-              </Text>
+              <Text style={{ color: '#64748b', fontSize: 11 }}>{def!.description}</Text>
             </View>
             <View style={{ alignItems: 'flex-end' }}>
-              <Text style={{ color: def.accentColor, fontSize: 22, fontFamily: 'Inter_900Black' }}>
-                LV.{build.level}
+              <Text style={{ color: def!.accentColor, fontSize: 24, fontFamily: 'Inter_900Black' }}>
+                LV.{build!.level}
               </Text>
-              {build.prestigeLevel > 0 && (
+              {build!.prestigeLevel > 0 && (
                 <Text style={{ color: '#f59e0b', fontSize: 10, fontFamily: 'Inter_700Bold' }}>
-                  P{build.prestigeLevel} ⭐
+                  P{build!.prestigeLevel}⭐
                 </Text>
               )}
             </View>
           </View>
 
           {/* XP bar */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-            <Text style={{ color: '#475569', fontSize: 9, fontFamily: 'Inter_700Bold' }}>XP</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+            <Text style={{ color: '#334155', fontSize: 9, fontFamily: 'Inter_700Bold' }}>XP</Text>
             <View
               style={{
                 flex: 1,
@@ -186,49 +344,74 @@ export default function TurretLabScreen() {
             >
               <View
                 style={{
-                  width: `${xpProgress}%` as `${number}%`,
                   height: '100%',
-                  backgroundColor: def.accentColor,
+                  width: `${(build!.xp / (build!.level * 200)) * 100}%` as `${number}%`,
+                  backgroundColor: def!.accentColor,
                   borderRadius: 3,
                 }}
               />
             </View>
-            <Text style={{ color: '#475569', fontSize: 9, fontFamily: 'Inter_700Bold' }}>
-              {build.xp.toFixed(0)}/{build.level * 200}
+            <Text style={{ color: '#334155', fontSize: 9, fontFamily: 'Inter_700Bold' }}>
+              {build!.xp.toFixed(0)}/{build!.level * 200}
             </Text>
           </View>
 
-          {/* Stat grid */}
+          {/* Power bar */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+            <Text style={{ color: '#334155', fontSize: 9, fontFamily: 'Inter_700Bold' }}>PWR</Text>
+            <View
+              style={{
+                flex: 1,
+                height: 5,
+                backgroundColor: '#0f172a',
+                borderRadius: 3,
+                overflow: 'hidden',
+              }}
+            >
+              <View
+                style={{
+                  height: '100%',
+                  width: `${(usedPower / build!.maxPower) * 100}%` as `${number}%`,
+                  backgroundColor: usedPower > build!.maxPower * 0.85 ? '#ef4444' : '#10b981',
+                  borderRadius: 3,
+                }}
+              />
+            </View>
+            <Text style={{ color: '#334155', fontSize: 9, fontFamily: 'Inter_700Bold' }}>
+              {usedPower}/{build!.maxPower}
+            </Text>
+          </View>
+
+          {/* Stats row */}
           <View style={{ flexDirection: 'row', gap: 8 }}>
             {[
-              { label: 'DMG', value: stats.damage },
-              { label: 'SPEED', value: stats.bulletSpeed },
-              { label: 'RANGE', value: stats.range },
-            ].map((st) => (
+              ['DMG', stats!.damage],
+              ['RNG', stats!.range],
+              ['SPD', stats!.bulletSpeed || '—'],
+            ].map(([lbl, val]) => (
               <View
-                key={st.label}
+                key={lbl as string}
                 style={{
                   flex: 1,
-                  backgroundColor: '#0a111e',
+                  backgroundColor: '#050d1a',
                   borderRadius: 8,
                   padding: 8,
                   alignItems: 'center',
                 }}
               >
                 <Text
-                  style={{ color: def.accentColor, fontSize: 15, fontFamily: 'Inter_900Black' }}
+                  style={{ color: def!.accentColor, fontSize: 15, fontFamily: 'Inter_900Black' }}
                 >
-                  {st.value}
+                  {val}
                 </Text>
-                <Text style={{ color: '#334155', fontSize: 9, fontFamily: 'Inter_700Bold' }}>
-                  {st.label}
+                <Text style={{ color: '#334155', fontSize: 8, fontFamily: 'Inter_700Bold' }}>
+                  {lbl as string}
                 </Text>
               </View>
             ))}
           </View>
 
-          {/* Prestige button */}
-          {isMaxLevel && (
+          {build!.level >= build!.maxLevel && (
             <TouchableOpacity
               onPress={() => setShowPrestige(true)}
               style={{
@@ -244,181 +427,120 @@ export default function TurretLabScreen() {
                 gap: 8,
               }}
             >
-              <TrendingUp size={16} color="#f59e0b" />
-              <Text style={{ color: '#f59e0b', fontSize: 13, fontFamily: 'Inter_900Black' }}>
-                PRESTIGE TURRET (+1 SLOT)
+              <TrendingUp size={15} color="#f59e0b" />
+              <Text style={{ color: '#f59e0b', fontSize: 12, fontFamily: 'Inter_900Black' }}>
+                PRESTIGE — ADD SLOT (MAX LEVEL REACHED)
               </Text>
             </TouchableOpacity>
           )}
         </View>
 
-        {/* ── MODULE SLOTS ─────────────────────────────────────── */}
+        {/* Module slots */}
         <Text
           style={{ color: '#475569', fontSize: 11, fontFamily: 'Inter_700Bold', marginBottom: 12 }}
         >
-          MODULE SLOTS ({build.slots.filter((sl) => sl.moduleDefId !== null).length}/
-          {build.slots.length} FILLED)
+          MODULE SLOTS ({build!.slots.filter((s) => s.instanceId).length}/{build!.slots.length} ·{' '}
+          {usedPower}/{build!.maxPower} PWR)
         </Text>
 
-        {build.slots.map((slot, i) => {
-          const modDef = slot.moduleDefId ? getModuleDef(slot.moduleDefId) : null;
-          const owned = slot.moduleDefId
-            ? ownedModules.find((m) => m.defId === slot.moduleDefId)
+        {build!.slots.map((slot, i) => {
+          const inst = slot.instanceId
+            ? ownedModules.find((m) => m.instanceId === slot.instanceId)
             : null;
-          const typeMatch = modDef && modDef.slotType === slot.type;
-          const upgradeLevel = owned ? owned.level + 1 : 1;
-          const upgradeCost =
-            modDef && owned ? calcModuleCost(modDef, upgradeLevel, slot.type) : null;
-          const canUpgrade =
-            modDef && owned && owned.level < modDef.maxLevel && gold >= (upgradeCost ?? Infinity);
-          const slotColor = SLOT_TYPE_COLORS[slot.type];
-          const isSelected = selectedSlotIdx === i;
+          const modDef = inst ? getModuleDef(inst.defId) : null;
+          const typeMatch = modDef ? modDef.slotType === slot.type : false;
+          const effPwr = modDef ? calcPowerCost(modDef, slot.type) : 0;
+          const isActive = activeSlot === i;
+          const upgCost = modDef && inst ? modDef.baseCost + modDef.costPerLevel * inst.level : 0;
+          const canUpg = modDef && inst && inst.level < modDef.maxLevel && gold >= upgCost;
 
           return (
             <MotiView
               key={i}
-              from={{ opacity: 0, translateY: 8 }}
-              animate={{ opacity: 1, translateY: 0 }}
-              transition={{ type: 'timing', duration: 250, delay: i * 40 }}
+              from={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
               style={{ marginBottom: 10 }}
             >
               <TouchableOpacity
-                onPress={() => {
-                  setSelectedSlotIdx(isSelected ? null : i);
-                  setShowModPicker(false);
-                }}
+                onPress={() => setActiveSlot(isActive ? null : i)}
                 style={{
-                  backgroundColor: isSelected ? '#0f1929' : '#0a0f1a',
+                  backgroundColor: isActive ? '#0f1929' : '#0a111e',
                   borderRadius: 12,
-                  borderWidth: 2,
-                  borderColor: isSelected ? slotColor : '#1e293b',
                   padding: 12,
+                  borderWidth: 2,
+                  borderColor: isActive ? SLOT_CLR[slot.type] : '#1e293b',
                 }}
               >
-                {/* Slot header */}
-                <View
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    marginBottom: modDef ? 8 : 0,
-                  }}
-                >
-                  {/* Slot type badge */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  {/* Type badge */}
                   <View
                     style={{
-                      width: 26,
-                      height: 26,
-                      borderRadius: 6,
-                      backgroundColor: slotColor + '33',
+                      width: 32,
+                      height: 32,
+                      borderRadius: 8,
+                      backgroundColor: SLOT_CLR[slot.type] + '22',
                       borderWidth: 1,
-                      borderColor: slotColor,
+                      borderColor: SLOT_CLR[slot.type],
                       alignItems: 'center',
                       justifyContent: 'center',
-                      marginRight: 10,
                     }}
                   >
-                    <Text style={{ color: slotColor, fontSize: 11, fontFamily: 'Inter_900Black' }}>
+                    <Text
+                      style={{
+                        color: SLOT_CLR[slot.type],
+                        fontSize: 13,
+                        fontFamily: 'Inter_900Black',
+                      }}
+                    >
                       {slot.type}
                     </Text>
                   </View>
-                  <Text
-                    style={{ color: '#475569', fontSize: 10, fontFamily: 'Inter_700Bold', flex: 1 }}
-                  >
-                    SLOT {i + 1} · {SLOT_TYPE_LABELS[slot.type]}
-                  </Text>
-                  {modDef ? (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      {typeMatch && (
-                        <View
-                          style={{
-                            backgroundColor: '#10b98133',
-                            paddingHorizontal: 6,
-                            paddingVertical: 2,
-                            borderRadius: 6,
-                          }}
-                        >
-                          <Text
-                            style={{ color: '#10b981', fontSize: 8, fontFamily: 'Inter_700Bold' }}
-                          >
-                            50% OFF
-                          </Text>
-                        </View>
-                      )}
-                      <ChevronRight size={14} color="#334155" />
-                    </View>
-                  ) : (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                      <Lock size={12} color="#334155" />
-                      <Text style={{ color: '#334155', fontSize: 10, fontFamily: 'Inter_700Bold' }}>
-                        EMPTY
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: '#475569', fontSize: 9, fontFamily: 'Inter_700Bold' }}>
+                      SLOT {i + 1} · {SLOT_LBL[slot.type]}
+                    </Text>
+                    {modDef && inst ? (
+                      <Text style={{ color: '#fff', fontSize: 12, fontFamily: 'Inter_700Bold' }}>
+                        {modDef.icon} {modDef.name} · LV.{inst.level}
                       </Text>
-                    </View>
-                  )}
-                </View>
-
-                {/* Equipped module info */}
-                {modDef && owned && (
-                  <View style={{ backgroundColor: '#050d1a', borderRadius: 8, padding: 10 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-                      <Text style={{ fontSize: 18, marginRight: 8 }}>{modDef.icon}</Text>
-                      <View style={{ flex: 1 }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                          <Text
-                            style={{ color: '#fff', fontSize: 13, fontFamily: 'Inter_700Bold' }}
-                          >
-                            {modDef.name}
-                          </Text>
-                          <View
-                            style={{
-                              backgroundColor: RARITY_COLOR[modDef.rarity] + '33',
-                              paddingHorizontal: 5,
-                              paddingVertical: 1,
-                              borderRadius: 4,
-                            }}
-                          >
-                            <Text
-                              style={{
-                                color: RARITY_COLOR[modDef.rarity],
-                                fontSize: 8,
-                                fontFamily: 'Inter_700Bold',
-                              }}
-                            >
-                              {RARITY_LABEL[modDef.rarity]}
-                            </Text>
-                          </View>
-                        </View>
-                        <Text
-                          style={{ color: '#475569', fontSize: 10, fontFamily: 'Inter_700Bold' }}
-                        >
-                          LV.{owned.level}/{modDef.maxLevel} · +
-                          {(modDef.baseValue * owned.level).toFixed(1)}
-                          {modDef.unit}
-                        </Text>
+                    ) : (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                        <Lock size={10} color="#334155" />
+                        <Text style={{ color: '#334155', fontSize: 11 }}>EMPTY</Text>
                       </View>
+                    )}
+                  </View>
+                  {modDef && (
+                    <View style={{ alignItems: 'flex-end', gap: 2 }}>
                       <Text
                         style={{
-                          color: SLOT_TYPE_COLORS[modDef.slotType],
-                          fontSize: 13,
-                          fontFamily: 'Inter_900Black',
+                          color: typeMatch ? '#10b981' : '#475569',
+                          fontSize: 9,
+                          fontFamily: 'Inter_700Bold',
+                        }}
+                      >
+                        {effPwr} PWR{typeMatch ? ' (50% OFF)' : ''}
+                      </Text>
+                      <Text
+                        style={{
+                          color: RARITY_COLOR[modDef.rarity],
+                          fontSize: 8,
+                          fontFamily: 'Inter_700Bold',
                         }}
                       >
                         {modDef.slotType}
                       </Text>
                     </View>
-                    <Text style={{ color: '#334155', fontSize: 10, fontFamily: 'Inter_700Bold' }}>
-                      {modDef.description}
-                    </Text>
-                  </View>
-                )}
+                  )}
+                </View>
               </TouchableOpacity>
 
-              {/* Expanded actions when slot is selected */}
-              {isSelected && (
+              {isActive && (
                 <View
                   style={{
                     backgroundColor: '#050d1a',
                     borderRadius: 10,
-                    padding: 12,
+                    padding: 10,
                     marginTop: 4,
                     borderWidth: 1,
                     borderColor: '#1e293b',
@@ -432,47 +554,45 @@ export default function TurretLabScreen() {
                       flex: 1,
                       backgroundColor: '#1e293b',
                       borderRadius: 10,
-                      paddingVertical: 12,
+                      paddingVertical: 11,
                       alignItems: 'center',
                     }}
                   >
-                    <Text style={{ color: '#fff', fontSize: 12, fontFamily: 'Inter_700Bold' }}>
+                    <Text style={{ color: '#fff', fontSize: 11, fontFamily: 'Inter_700Bold' }}>
                       {modDef ? '🔄 CHANGE' : '+ EQUIP'}
                     </Text>
                   </TouchableOpacity>
-
-                  {modDef && owned && (
+                  {modDef && inst && (
                     <>
                       <TouchableOpacity
-                        onPress={() => handleUpgrade(i)}
-                        disabled={!canUpgrade}
+                        onPress={() => upgradeTurretSlotModule(activeTurret!, i)}
+                        disabled={!canUpg}
                         style={{
                           flex: 1,
-                          backgroundColor: canUpgrade ? '#10b98122' : '#0f172a',
+                          backgroundColor: canUpg ? '#10b98122' : '#0f172a',
                           borderRadius: 10,
-                          paddingVertical: 12,
+                          paddingVertical: 11,
                           alignItems: 'center',
                           borderWidth: 1,
-                          borderColor: canUpgrade ? '#10b981' : '#1e293b',
+                          borderColor: canUpg ? '#10b981' : '#1e293b',
                         }}
                       >
-                        <ArrowUp size={13} color={canUpgrade ? '#10b981' : '#334155'} />
+                        <ArrowUp size={13} color={canUpg ? '#10b981' : '#334155'} />
                         <Text
                           style={{
-                            color: canUpgrade ? '#10b981' : '#334155',
-                            fontSize: 10,
+                            color: canUpg ? '#10b981' : '#334155',
+                            fontSize: 9,
                             fontFamily: 'Inter_700Bold',
                             marginTop: 2,
                           }}
                         >
-                          UPGRADE {upgradeCost}g{typeMatch ? ' (50%)' : ''}
+                          {upgCost}g
                         </Text>
                       </TouchableOpacity>
-
                       <TouchableOpacity
-                        onPress={() => setTurretModSlot(selectedTurret, i, null)}
+                        onPress={() => setTurretSlotInstance(activeTurret!, i, null)}
                         style={{
-                          width: 44,
+                          width: 42,
                           backgroundColor: '#ef444422',
                           borderRadius: 10,
                           alignItems: 'center',
@@ -481,7 +601,7 @@ export default function TurretLabScreen() {
                           borderColor: '#ef444455',
                         }}
                       >
-                        <X size={16} color="#ef4444" />
+                        <X size={15} color="#ef4444" />
                       </TouchableOpacity>
                     </>
                   )}
@@ -490,19 +610,9 @@ export default function TurretLabScreen() {
             </MotiView>
           );
         })}
-
-        {/* Gold indicator */}
-        <View style={{ marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-          <Text style={{ color: '#fbbf24', fontSize: 12, fontFamily: 'Inter_700Bold' }}>
-            💰 {gold.toLocaleString()} GOLD
-          </Text>
-          <Text style={{ color: '#334155', fontSize: 11 }}>
-            · Slot type match = 50% off upgrades
-          </Text>
-        </View>
       </ScrollView>
 
-      {/* ── MODULE PICKER MODAL ──────────────────────────────── */}
+      {/* ── MODULE PICKER MODAL ─── */}
       <Modal visible={showModPicker} transparent animationType="slide">
         <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: '#000000bb' }}>
           <View
@@ -510,7 +620,7 @@ export default function TurretLabScreen() {
               backgroundColor: '#0a111e',
               borderTopLeftRadius: 24,
               borderTopRightRadius: 24,
-              maxHeight: '80%',
+              maxHeight: '82%',
               borderWidth: 1,
               borderColor: '#1e293b',
             }}
@@ -519,73 +629,92 @@ export default function TurretLabScreen() {
               style={{
                 flexDirection: 'row',
                 alignItems: 'center',
-                padding: 20,
+                padding: 18,
                 paddingBottom: 12,
                 borderBottomWidth: 1,
                 borderBottomColor: '#1e293b',
               }}
             >
-              <Text style={{ color: '#fff', fontSize: 16, fontFamily: 'Inter_900Black', flex: 1 }}>
-                EQUIP MODULE — SLOT {selectedSlotIdx !== null ? selectedSlotIdx + 1 : ''}
+              <Text style={{ color: '#fff', fontSize: 15, fontFamily: 'Inter_900Black', flex: 1 }}>
+                EQUIP MODULE — SLOT {activeSlot !== null ? activeSlot + 1 : ''}
+                {activeSlot !== null ? ` [${build!.slots[activeSlot].type}]` : ''}
               </Text>
               <TouchableOpacity
                 onPress={() => setShowModPicker(false)}
                 style={{ backgroundColor: '#1e293b', borderRadius: 20, padding: 8 }}
               >
-                <X size={16} color="#fff" />
+                <X size={15} color="#fff" />
               </TouchableOpacity>
             </View>
 
-            {selectedSlotIdx !== null && (
+            {activeSlot !== null && (
               <View
                 style={{ paddingHorizontal: 16, paddingVertical: 8, backgroundColor: '#050d1a' }}
               >
-                <Text style={{ color: '#475569', fontSize: 10, fontFamily: 'Inter_700Bold' }}>
-                  SLOT TYPE:{' '}
-                  <Text style={{ color: SLOT_TYPE_COLORS[build.slots[selectedSlotIdx].type] }}>
-                    {SLOT_TYPE_LABELS[build.slots[selectedSlotIdx].type]}
+                <Text style={{ color: '#475569', fontSize: 10 }}>
+                  Slot type:{' '}
+                  <Text
+                    style={{
+                      color: SLOT_CLR[build!.slots[activeSlot].type],
+                      fontFamily: 'Inter_700Bold',
+                    }}
+                  >
+                    {build!.slots[activeSlot].type} – {SLOT_LBL[build!.slots[activeSlot].type]}
                   </Text>
-                  {'  '}·{'  '}Matching slotType = 50% upgrade cost
+                  {'  ·  '}Matching type = 50% POWER cost
                 </Text>
               </View>
             )}
 
-            <ScrollView style={{ padding: 16 }} showsVerticalScrollIndicator={false}>
-              {eligibleMods.length === 0 ? (
-                <Text style={{ color: '#334155', textAlign: 'center', padding: 20 }}>
-                  No modules owned for this turret yet
-                </Text>
-              ) : null}
-
-              {eligibleMods.map((modDef) => {
-                const owned = ownedModules.find((m) => m.defId === modDef.id);
-                if (!owned) return null; // only show owned modules
-
-                const slotType =
-                  selectedSlotIdx !== null ? build.slots[selectedSlotIdx].type : null;
-                const typeMatch = modDef.slotType === slotType;
-                const currentlyEquipped =
-                  build.slots[selectedSlotIdx ?? -1]?.moduleDefId === modDef.id;
+            <FlatList
+              data={ownedModules.filter((inst) => ownedEligible.some((d) => d.id === inst.defId))}
+              keyExtractor={(item) => item.instanceId}
+              contentContainerStyle={{ padding: 14 }}
+              showsVerticalScrollIndicator={false}
+              renderItem={({ item: inst }) => {
+                const modDef = getModuleDef(inst.defId)!;
+                const slotT = activeSlot !== null ? build!.slots[activeSlot].type : null;
+                const match = slotT && modDef.slotType === slotT;
+                const pw = slotT ? calcPowerCost(modDef, slotT) : (modDef.powerCost ?? 16);
+                const wouldExceed =
+                  slotT && build
+                    ? getUsedPower(build, ownedModules) -
+                        (build.slots[activeSlot!]?.instanceId
+                          ? calcPowerCost(
+                              getModuleDef(
+                                ownedModules.find(
+                                  (m) => m.instanceId === build.slots[activeSlot!].instanceId
+                                )?.defId ?? ''
+                              )!,
+                              slotT
+                            )
+                          : 0) +
+                        pw >
+                      build.maxPower
+                    : false;
+                const isCurrent =
+                  activeSlot !== null && build!.slots[activeSlot].instanceId === inst.instanceId;
 
                 return (
                   <TouchableOpacity
-                    key={modDef.id}
-                    onPress={() => handlePickModule(modDef)}
+                    onPress={() => handleEquip(inst)}
+                    disabled={wouldExceed && !isCurrent}
                     style={{
-                      backgroundColor: currentlyEquipped ? '#0f2a1a' : '#0a1120',
+                      backgroundColor: isCurrent ? '#0f2a1a' : '#0a1120',
                       borderRadius: 12,
                       padding: 12,
                       marginBottom: 8,
                       borderWidth: 2,
-                      borderColor: currentlyEquipped
+                      borderColor: isCurrent
                         ? '#10b981'
-                        : typeMatch
-                          ? SLOT_TYPE_COLORS[modDef.slotType] + '55'
+                        : match
+                          ? SLOT_CLR[modDef.slotType] + '66'
                           : '#1e293b',
+                      opacity: wouldExceed && !isCurrent ? 0.4 : 1,
                     }}
                   >
-                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                      <Text style={{ fontSize: 22, marginRight: 10 }}>{modDef.icon}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                      <Text style={{ fontSize: 22 }}>{modDef.icon}</Text>
                       <View style={{ flex: 1 }}>
                         <View
                           style={{
@@ -596,7 +725,7 @@ export default function TurretLabScreen() {
                           }}
                         >
                           <Text
-                            style={{ color: '#fff', fontSize: 13, fontFamily: 'Inter_700Bold' }}
+                            style={{ color: '#fff', fontSize: 12, fontFamily: 'Inter_700Bold' }}
                           >
                             {modDef.name}
                           </Text>
@@ -611,7 +740,7 @@ export default function TurretLabScreen() {
                             <Text
                               style={{
                                 color: RARITY_COLOR[modDef.rarity],
-                                fontSize: 8,
+                                fontSize: 7,
                                 fontFamily: 'Inter_700Bold',
                               }}
                             >
@@ -619,53 +748,59 @@ export default function TurretLabScreen() {
                             </Text>
                           </View>
                         </View>
-                        <Text
-                          style={{ color: '#475569', fontSize: 10, fontFamily: 'Inter_700Bold' }}
-                        >
-                          LV.{owned.level} · +{(modDef.baseValue * owned.level).toFixed(1)}
-                          {modDef.unit} · {modDef.description}
+                        <Text style={{ color: '#475569', fontSize: 9 }}>
+                          LV.{inst.level} · +{(modDef.baseValue * inst.level).toFixed(1)}
+                          {modDef.unit}
                         </Text>
                       </View>
                       <View style={{ alignItems: 'flex-end', gap: 3 }}>
                         <View
                           style={{
-                            backgroundColor: SLOT_TYPE_COLORS[modDef.slotType] + '33',
-                            paddingHorizontal: 7,
+                            backgroundColor: SLOT_CLR[modDef.slotType] + '33',
+                            paddingHorizontal: 6,
                             paddingVertical: 3,
                             borderRadius: 6,
                             borderWidth: 1,
-                            borderColor: SLOT_TYPE_COLORS[modDef.slotType],
+                            borderColor: SLOT_CLR[modDef.slotType],
                           }}
                         >
                           <Text
                             style={{
-                              color: SLOT_TYPE_COLORS[modDef.slotType],
-                              fontSize: 11,
+                              color: SLOT_CLR[modDef.slotType],
+                              fontSize: 10,
                               fontFamily: 'Inter_900Black',
                             }}
                           >
                             {modDef.slotType}
                           </Text>
                         </View>
-                        {typeMatch && (
+                        <Text
+                          style={{
+                            color: match ? '#10b981' : '#475569',
+                            fontSize: 9,
+                            fontFamily: 'Inter_700Bold',
+                          }}
+                        >
+                          {pw} PWR{match ? ' ↓50%' : ''}
+                        </Text>
+                        {wouldExceed && !isCurrent && (
                           <Text
-                            style={{ color: '#10b981', fontSize: 8, fontFamily: 'Inter_700Bold' }}
+                            style={{ color: '#ef4444', fontSize: 8, fontFamily: 'Inter_700Bold' }}
                           >
-                            50% OFF
+                            OVER PWR
                           </Text>
                         )}
                       </View>
                     </View>
                   </TouchableOpacity>
                 );
-              })}
-              <View style={{ height: 30 }} />
-            </ScrollView>
+              }}
+            />
           </View>
         </View>
       </Modal>
 
-      {/* ── PRESTIGE MODAL ───────────────────────────────────── */}
+      {/* ── PRESTIGE MODAL ─── */}
       <Modal visible={showPrestige} transparent animationType="fade">
         <View
           style={{
@@ -673,7 +808,7 @@ export default function TurretLabScreen() {
             backgroundColor: '#000000cc',
             alignItems: 'center',
             justifyContent: 'center',
-            padding: 24,
+            padding: 22,
           }}
         >
           <MotiView
@@ -699,55 +834,40 @@ export default function TurretLabScreen() {
               TURRET PRESTIGE
             </Text>
             <Text
-              style={{ color: '#fff', fontSize: 22, fontFamily: 'Inter_900Black', marginBottom: 6 }}
+              style={{ color: '#fff', fontSize: 20, fontFamily: 'Inter_900Black', marginBottom: 8 }}
             >
-              {def.name} — PRESTIGE {build.prestigeLevel + 1}
+              {def?.icon} {def?.name} — P{(build?.prestigeLevel ?? 0) + 1}
             </Text>
-            <Text style={{ color: '#475569', fontSize: 12, marginBottom: 24 }}>
-              Resets turret to LV.1 but unlocks a new module slot. Choose its type:
+            <Text style={{ color: '#475569', fontSize: 12, marginBottom: 20 }}>
+              Resets to LV.1 but unlocks a new module slot (+20 max power). Choose its type:
             </Text>
-
-            <Text
-              style={{
-                color: '#334155',
-                fontSize: 11,
-                fontFamily: 'Inter_700Bold',
-                marginBottom: 10,
-              }}
-            >
-              NEW SLOT TYPE
-            </Text>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 24 }}>
-              {PRESTIGE_SLOT_TYPES.map((st) => (
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 22 }}>
+              {PRESTIGE_TYPES.map((st) => (
                 <TouchableOpacity
                   key={st}
-                  onPress={() => setPickedSlotType(st)}
+                  onPress={() => setNewSlotType(st)}
                   style={{
                     paddingHorizontal: 14,
                     paddingVertical: 10,
                     borderRadius: 10,
                     borderWidth: 2,
-                    backgroundColor:
-                      pickedSlotType === st ? SLOT_TYPE_COLORS[st] + '33' : '#0f172a',
-                    borderColor: pickedSlotType === st ? SLOT_TYPE_COLORS[st] : '#1e293b',
+                    backgroundColor: newSlotType === st ? SLOT_CLR[st] + '33' : '#0f172a',
+                    borderColor: newSlotType === st ? SLOT_CLR[st] : '#1e293b',
                   }}
                 >
                   <Text
                     style={{
-                      color: pickedSlotType === st ? SLOT_TYPE_COLORS[st] : '#475569',
+                      color: newSlotType === st ? SLOT_CLR[st] : '#475569',
                       fontSize: 13,
                       fontFamily: 'Inter_900Black',
                     }}
                   >
                     {st}
                   </Text>
-                  <Text style={{ color: '#334155', fontSize: 9, fontFamily: 'Inter_700Bold' }}>
-                    {SLOT_TYPE_LABELS[st].split('–')[1].trim()}
-                  </Text>
+                  <Text style={{ color: '#334155', fontSize: 9 }}>{SLOT_LBL[st]}</Text>
                 </TouchableOpacity>
               ))}
             </View>
-
             <View style={{ flexDirection: 'row', gap: 10 }}>
               <TouchableOpacity
                 onPress={() => setShowPrestige(false)}

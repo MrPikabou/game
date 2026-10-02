@@ -1,6 +1,5 @@
 /**
  * CORE MODULE TYPES
- * These types are shared across all module definition files.
  *
  * SlotType legend:
  *  X = eXplosive / Offensive damage
@@ -9,7 +8,16 @@
  *  E = Exotic / Build-defining
  *  O = Omni / Utility, defensive, passive
  *
- * When a module's slotType matches the slot it's placed in → 50% cost discount.
+ * POWER SYSTEM:
+ *  Each turret has a maxPower pool (e.g. 100 power).
+ *  Each module has a powerCost (e.g. 16 power).
+ *  When the module's slotType matches the slot it's placed in → 50% POWER cost reduction.
+ *  (The slotType discount is NOT a gold cost discount — it's purely about power slots.)
+ *  Turret can't equip a module if usedPower + effectivePowerCost > maxPower.
+ *
+ * DUPLICATE MODULES:
+ *  Each owned module is a unique ModuleInstance with its own instanceId + level.
+ *  You can own two instances of the same defId at different levels.
  */
 
 export type SlotType = 'X' | 'V' | 'C' | 'E' | 'O';
@@ -25,49 +33,62 @@ export interface ModuleDef {
   category: string;
   slotType: SlotType;
   rarity: Rarity;
-  /** Base gold cost at level 1 */
+  /** Gold cost to upgrade to the next level */
   baseCost: number;
-  /** Additional gold cost per level (rarity-based). common=40, rare=100, epic=250, legendary=600 */
+  /** Additional gold cost per level */
   costPerLevel: number;
   maxLevel: number;
   description: string;
-  /** Internal stat key used by the game engine */
   statKey: string;
-  /** Stat value added per level */
   baseValue: number;
-  /** Display unit — '%', 'hp', 'px', 'dps', etc. */
   unit: string;
   /**
-   * Which targets can equip this module:
-   *  'all'    → player + all turrets
-   *  'player' → player only
-   *  TurretTypeKey[] → specific turrets only (player cannot equip)
+   * Base POWER cost when equipped in any slot.
+   * common ≈ 8, rare ≈ 16, epic ≈ 24, legendary ≈ 36.
+   * If the slot's type matches this module's slotType → powerCost is halved.
+   * Optional — falls back to RARITY_POWER_COST[rarity] if omitted.
    */
+  powerCost?: number;
   applicableTo: 'all' | 'player' | TurretTypeKey[];
 }
 
-/** Persistent state for a single module instance in the player's collection */
-export interface OwnedModule {
-  defId: string; // references ModuleDef.id
+/**
+ * A single owned module instance — each has its own id so duplicates are possible.
+ * Two instances of the same defId can exist at different levels.
+ */
+export interface ModuleInstance {
+  /** Unique instance id (e.g. "inst_1234") */
+  instanceId: string;
+  defId: string;
   level: number;
 }
 
-/** A turret's module slot — the type determines the 50% cost discount */
+/** A turret's module slot */
 export interface TurretSlot {
   type: SlotType;
-  moduleDefId: string | null; // null = empty
+  /** instanceId of the equipped module (null = empty) */
+  instanceId: string | null;
+}
+
+/** Gold cost to upgrade a module from its current level to the next */
+export function calcUpgradeCost(def: ModuleDef, currentLevel: number): number {
+  return def.baseCost + def.costPerLevel * currentLevel;
 }
 
 /**
- * Returns the gold cost for a module at its current level,
- * applying a 50% discount when slotType matches module's slotType.
+ * Effective power cost when a module is placed in a slot.
+ * Halved if slot type matches module's slotType.
  */
-export function calcModuleCost(def: ModuleDef, level: number, slotType: SlotType | null): number {
-  const raw = def.baseCost + def.costPerLevel * (level - 1);
-  return slotType === def.slotType ? Math.floor(raw * 0.5) : raw;
+export function calcPowerCost(def: ModuleDef, slotType: SlotType): number {
+  const cost = def.powerCost ?? RARITY_POWER_COST[def.rarity];
+  return slotType === def.slotType ? Math.floor(cost * 0.5) : cost;
 }
 
-/** Rarity display helpers */
+/** @deprecated — kept for backward compat; use calcUpgradeCost instead */
+export function calcModuleCost(def: ModuleDef, level: number, _slotType: SlotType | null): number {
+  return calcUpgradeCost(def, level - 1);
+}
+
 export const RARITY_COLOR: Record<Rarity, string> = {
   common: '#9ca3af',
   rare: '#3b82f6',
@@ -80,4 +101,12 @@ export const RARITY_LABEL: Record<Rarity, string> = {
   rare: 'RARE',
   epic: 'EPIC',
   legendary: 'LEGENDARY',
+};
+
+/** Default power costs by rarity */
+export const RARITY_POWER_COST: Record<Rarity, number> = {
+  common: 8,
+  rare: 16,
+  epic: 24,
+  legendary: 36,
 };

@@ -2,75 +2,159 @@ import React from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useGameStore } from '@/utils/gameStore';
-import { TrendingUp, Lock, Shield, Zap, Target, Star } from 'lucide-react-native';
+import { TrendingUp, Shield, Zap, Target, Star, Lock } from 'lucide-react-native';
 import { MotiView } from 'moti';
 
 export default function Prestige() {
   const insets = useSafeAreaInsets();
-  const { prestigeLevel, prestigePoints, characterLevel, prestige } = useGameStore();
+  const {
+    prestigeLevel,
+    prestigePoints,
+    characterLevel,
+    prestige,
+    gold,
+    ownedModules,
+    turretBuilds,
+  } = useGameStore();
 
   const handlePrestige = () => {
     if (characterLevel < 10) {
-      Alert.alert('NOT READY', 'Reach Level 10 to Prestige.');
+      Alert.alert('NOT READY', 'Reach Commander Level 10 to Prestige.');
       return;
     }
-
-    Alert.alert('PRESTIGE', 'Reset Level and Gold to gain permanent bonuses?', [
-      { text: 'CANCEL', style: 'cancel' },
-      { text: 'PRESTIGE', onPress: () => prestige() },
-    ]);
+    Alert.alert(
+      'PRESTIGE',
+      'Reset your Commander Level to 1. You KEEP all modules, gold, turrets, and materials. You gain a permanent stat boost.',
+      [
+        { text: 'CANCEL', style: 'cancel' },
+        { text: 'ASCEND', style: 'destructive', onPress: () => prestige() },
+      ]
+    );
   };
 
-  const bonuses = [
+  const statBoosts = [
     {
       icon: Shield,
       name: 'Base Health',
-      value: `+${prestigeLevel * 5}%`,
-      desc: 'Permanent health boost',
+      value: `+${(prestigeLevel + 1) * 5}%`,
+      desc: 'Applied each run on next prestige',
+      color: '#ef4444',
     },
     {
       icon: Target,
       name: 'Base Damage',
-      value: `+${prestigeLevel * 10}%`,
-      desc: 'Permanent damage output boost',
+      value: `+${(prestigeLevel + 1) * 10}%`,
+      desc: 'Increases all damage dealt',
+      color: '#f97316',
     },
     {
       icon: Zap,
-      name: 'Module Efficiency',
-      value: `+${prestigeLevel * 2}%`,
-      desc: 'Increases all module effects',
+      name: 'Module Power',
+      value: `+${(prestigeLevel + 1) * 2}%`,
+      desc: 'Boosts all module stat effects',
+      color: '#a855f7',
     },
   ];
 
+  const currentBoosts =
+    prestigeLevel > 0
+      ? [
+          { icon: Shield, name: 'Base Health', value: `+${prestigeLevel * 5}%`, color: '#ef4444' },
+          { icon: Target, name: 'Base Damage', value: `+${prestigeLevel * 10}%`, color: '#f97316' },
+          { icon: Zap, name: 'Module Power', value: `+${prestigeLevel * 2}%`, color: '#a855f7' },
+        ]
+      : null;
+
+  const modulesOwned = ownedModules.length;
+  const turretsLevelled = Object.values(turretBuilds).filter((b) => b.level > 1).length;
+
   return (
     <View style={{ flex: 1, backgroundColor: '#050505', paddingTop: insets.top }}>
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 25 }}>
-        <View style={{ alignItems: 'center', marginBottom: 40 }}>
+      <ScrollView
+        contentContainerStyle={{ padding: 22, paddingBottom: 60 }}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Header */}
+        <View style={{ alignItems: 'center', marginBottom: 32 }}>
           <MotiView
-            from={{ rotate: '0deg', scale: 0.8 }}
-            animate={{ rotate: '360deg', scale: 1 }}
-            transition={{ type: 'timing', duration: 4000, loop: true }}
+            from={{ scale: 0.9 }}
+            animate={{ scale: 1.0 }}
+            transition={{ type: 'spring', loop: true, repeatReverse: true }}
           >
-            <TrendingUp size={80} color="#a855f7" />
+            <TrendingUp size={72} color="#a855f7" />
           </MotiView>
           <Text
-            style={{ color: '#fff', fontSize: 32, fontFamily: 'Inter_900Black', marginTop: 20 }}
+            style={{ color: '#fff', fontSize: 30, fontFamily: 'Inter_900Black', marginTop: 16 }}
           >
             PRESTIGE
           </Text>
-          <Text style={{ color: '#666', fontSize: 16, fontFamily: 'Inter_700Bold' }}>
-            TIER {prestigeLevel}
+          <Text style={{ color: '#a855f7', fontSize: 14, fontFamily: 'Inter_700Bold' }}>
+            TIER {prestigeLevel} {prestigeLevel > 0 ? '⭐'.repeat(Math.min(prestigeLevel, 5)) : ''}
           </Text>
         </View>
 
+        {/* Stats kept card */}
         <View
           style={{
-            backgroundColor: '#111',
-            borderRadius: 20,
-            padding: 20,
-            marginBottom: 30,
+            backgroundColor: '#0a111e',
+            borderRadius: 16,
+            padding: 18,
+            marginBottom: 16,
             borderWidth: 1,
-            borderColor: '#222',
+            borderColor: '#1e293b',
+          }}
+        >
+          <Text
+            style={{
+              color: '#475569',
+              fontSize: 11,
+              fontFamily: 'Inter_700Bold',
+              marginBottom: 14,
+            }}
+          >
+            ✅ WHAT YOU KEEP ON PRESTIGE
+          </Text>
+          {[
+            { label: `${modulesOwned} modules owned`, icon: '🔮' },
+            { label: `${gold.toLocaleString()} gold`, icon: '💰' },
+            { label: `${turretsLevelled} turrets levelled`, icon: '⚙️' },
+            { label: 'All materials & progress', icon: '🧪' },
+            { label: 'All prestige points', icon: '⭐' },
+          ].map((item, i) => (
+            <View
+              key={i}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 10,
+                paddingVertical: 7,
+                borderBottomWidth: i < 4 ? 1 : 0,
+                borderBottomColor: '#0f172a',
+              }}
+            >
+              <Text style={{ fontSize: 16 }}>{item.icon}</Text>
+              <Text style={{ color: '#94a3b8', fontSize: 13, fontFamily: 'Inter_700Bold' }}>
+                {item.label}
+              </Text>
+            </View>
+          ))}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingTop: 10 }}>
+            <Text style={{ fontSize: 16 }}>⬇️</Text>
+            <Text style={{ color: '#ef4444', fontSize: 13, fontFamily: 'Inter_700Bold' }}>
+              Character Level resets to 1
+            </Text>
+          </View>
+        </View>
+
+        {/* Prestige points */}
+        <View
+          style={{
+            backgroundColor: '#0a111e',
+            borderRadius: 16,
+            padding: 18,
+            marginBottom: 16,
+            borderWidth: 1,
+            borderColor: '#2d1b69',
           }}
         >
           <View
@@ -78,121 +162,177 @@ export default function Prestige() {
               flexDirection: 'row',
               justifyContent: 'space-between',
               alignItems: 'center',
-              marginBottom: 20,
+              marginBottom: 12,
             }}
           >
-            <View>
-              <Text style={{ color: '#666', fontSize: 12, fontFamily: 'Inter_700Bold' }}>
-                PRESTIGE POINTS
-              </Text>
-              <Text style={{ color: '#a855f7', fontSize: 28, fontFamily: 'Inter_900Black' }}>
-                {prestigePoints.toLocaleString()}
-              </Text>
-            </View>
-            <Star size={32} color="#a855f7" fill="#a855f7" />
+            <Text style={{ color: '#475569', fontSize: 11, fontFamily: 'Inter_700Bold' }}>
+              PRESTIGE POINTS
+            </Text>
+            <Star size={20} color="#a855f7" fill="#a855f7" />
           </View>
-
           <Text
-            style={{ color: '#666', fontSize: 12, fontFamily: 'Inter_700Bold', marginBottom: 15 }}
+            style={{
+              color: '#a855f7',
+              fontSize: 36,
+              fontFamily: 'Inter_900Black',
+              marginBottom: 4,
+            }}
           >
-            PERMANENT BONUSES
+            {prestigePoints}
           </Text>
-          {bonuses.map((bonus, i) => (
+          <Text style={{ color: '#334155', fontSize: 11 }}>+50 points on next prestige</Text>
+        </View>
+
+        {/* Current boosts */}
+        {currentBoosts && (
+          <View
+            style={{
+              backgroundColor: '#0a111e',
+              borderRadius: 16,
+              padding: 18,
+              marginBottom: 16,
+              borderWidth: 1,
+              borderColor: '#1e293b',
+            }}
+          >
+            <Text
+              style={{
+                color: '#475569',
+                fontSize: 11,
+                fontFamily: 'Inter_700Bold',
+                marginBottom: 12,
+              }}
+            >
+              CURRENT BOOSTS (TIER {prestigeLevel})
+            </Text>
+            {currentBoosts.map((b, i) => (
+              <View
+                key={i}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 12,
+                  paddingVertical: 8,
+                  borderBottomWidth: i < 2 ? 1 : 0,
+                  borderBottomColor: '#0f172a',
+                }}
+              >
+                <View
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 8,
+                    backgroundColor: b.color + '22',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <b.icon size={18} color={b.color} />
+                </View>
+                <Text
+                  style={{ flex: 1, color: '#94a3b8', fontSize: 13, fontFamily: 'Inter_700Bold' }}
+                >
+                  {b.name}
+                </Text>
+                <Text style={{ color: b.color, fontSize: 16, fontFamily: 'Inter_900Black' }}>
+                  {b.value}
+                </Text>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {/* Next prestige boosts */}
+        <View
+          style={{
+            backgroundColor: '#0a111e',
+            borderRadius: 16,
+            padding: 18,
+            marginBottom: 24,
+            borderWidth: 1,
+            borderColor: '#a855f733',
+          }}
+        >
+          <Text
+            style={{
+              color: '#a855f7',
+              fontSize: 11,
+              fontFamily: 'Inter_700Bold',
+              marginBottom: 12,
+            }}
+          >
+            ON NEXT PRESTIGE (TIER {prestigeLevel + 1})
+          </Text>
+          {statBoosts.map((b, i) => (
             <View
               key={i}
               style={{
                 flexDirection: 'row',
                 alignItems: 'center',
-                gap: 15,
-                marginBottom: 15,
-                backgroundColor: '#050505',
-                padding: 12,
-                borderRadius: 12,
+                gap: 12,
+                paddingVertical: 8,
+                borderBottomWidth: i < 2 ? 1 : 0,
+                borderBottomColor: '#0f172a',
               }}
             >
               <View
                 style={{
-                  width: 40,
-                  height: 40,
-                  backgroundColor: '#111',
+                  width: 36,
+                  height: 36,
                   borderRadius: 8,
+                  backgroundColor: b.color + '22',
                   alignItems: 'center',
                   justifyContent: 'center',
                 }}
               >
-                <bonus.icon size={20} color="#a855f7" />
+                <b.icon size={18} color={b.color} />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={{ color: '#fff', fontSize: 14, fontFamily: 'Inter_700Bold' }}>
-                  {bonus.name}
+                <Text style={{ color: '#fff', fontSize: 13, fontFamily: 'Inter_700Bold' }}>
+                  {b.name}
                 </Text>
-                <Text style={{ color: '#666', fontSize: 10 }}>{bonus.desc}</Text>
+                <Text style={{ color: '#334155', fontSize: 10 }}>{b.desc}</Text>
               </View>
-              <Text style={{ color: '#a855f7', fontSize: 16, fontFamily: 'Inter_900Black' }}>
-                {bonus.value}
+              <Text style={{ color: b.color, fontSize: 16, fontFamily: 'Inter_900Black' }}>
+                {b.value}
               </Text>
             </View>
           ))}
         </View>
 
+        {/* Prestige button */}
         <TouchableOpacity
           onPress={handlePrestige}
           style={{
-            backgroundColor: characterLevel >= 10 ? '#a855f7' : '#222',
-            height: 70,
-            borderRadius: 15,
+            backgroundColor: characterLevel >= 10 ? '#a855f7' : '#111',
+            height: 68,
+            borderRadius: 14,
             alignItems: 'center',
             justifyContent: 'center',
-            shadowColor: '#a855f7',
-            shadowOffset: { width: 0, height: 10 },
-            shadowOpacity: 0.3,
-            shadowRadius: 15,
+            borderWidth: characterLevel >= 10 ? 0 : 1,
+            borderColor: '#334155',
           }}
         >
-          <Text style={{ color: '#fff', fontSize: 20, fontFamily: 'Inter_900Black' }}>
-            {characterLevel >= 10 ? 'ASCEND NOW' : `LV. ${characterLevel} / 10`}
-          </Text>
-          <Text style={{ color: '#fff', fontSize: 10, opacity: 0.7 }}>
-            RESET PROGRESS FOR POWER
-          </Text>
-        </TouchableOpacity>
-
-        <View style={{ marginTop: 40 }}>
-          <Text
-            style={{ color: '#666', fontSize: 12, fontFamily: 'Inter_700Bold', marginBottom: 15 }}
-          >
-            UNLOCKED CONTENT
-          </Text>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
-            {['Void Zone', 'Hyper Rounds', 'Core Stabilizer'].map((item, i) => (
-              <View
-                key={i}
-                style={{
-                  paddingHorizontal: 15,
-                  paddingVertical: 8,
-                  backgroundColor: prestigeLevel > i ? '#a855f722' : '#111',
-                  borderRadius: 20,
-                  borderWidth: 1,
-                  borderColor: prestigeLevel > i ? '#a855f7' : '#222',
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: 8,
-                }}
-              >
-                {prestigeLevel <= i && <Lock size={12} color="#666" />}
-                <Text
-                  style={{
-                    color: prestigeLevel > i ? '#a855f7' : '#666',
-                    fontSize: 12,
-                    fontFamily: 'Inter_700Bold',
-                  }}
-                >
-                  {item}
+          {characterLevel >= 10 ? (
+            <>
+              <Text style={{ color: '#fff', fontSize: 20, fontFamily: 'Inter_900Black' }}>
+                ⭐ ASCEND NOW
+              </Text>
+              <Text style={{ color: '#e9d5ff', fontSize: 10, marginTop: 2 }}>
+                Level resets · Everything else kept
+              </Text>
+            </>
+          ) : (
+            <>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Lock size={16} color="#475569" />
+                <Text style={{ color: '#475569', fontSize: 16, fontFamily: 'Inter_900Black' }}>
+                  LV. {characterLevel} / 10 TO PRESTIGE
                 </Text>
               </View>
-            ))}
-          </View>
-        </View>
+            </>
+          )}
+        </TouchableOpacity>
       </ScrollView>
     </View>
   );

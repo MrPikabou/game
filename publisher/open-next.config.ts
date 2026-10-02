@@ -22,6 +22,14 @@ const config: OpenNextConfig = {
   },
   default: {
     override: {
+      // Lambda response streaming is opted-in per publish via env: any response
+      // larger than the 6MB buffered Lambda payload ceiling (about 4.5MiB of
+      // binary body after base64 encoding) fails at the origin in buffered
+      // mode. Streaming requires the server Function URL invokeMode
+      // RESPONSE_STREAM, which deploy() sets from the same publish flag.
+      ...(process.env.ANYTHING_STREAMING_RESPONSE === "1"
+        ? { wrapper: "aws-lambda-streaming" }
+        : {}),
       // Use S3 for incremental cache (ISR/SSG pages and fetch cache)
       // This requires CACHE_BUCKET_NAME, CACHE_BUCKET_REGION, CACHE_BUCKET_KEY_PREFIX env vars
       incrementalCache: "s3",

@@ -45,6 +45,15 @@ export const AuthModal = () => {
   const { auth } = useAuthStore();
   const { isOpen, mode } = useAuthModal();
 
+  // Never mount the native modal when it is not in use. React Native's Modal
+  // keeps its iOS presentation layer alive even when visible={false}, and a
+  // lingering presentation layer can eat touches across the whole app with no
+  // crash (facebook/react-native#50152, #54856). The visible prop below stays
+  // as a second guard.
+  if (!isOpen || auth) {
+    return null;
+  }
+
   const proxyURL = process.env.EXPO_PUBLIC_PROXY_BASE_URL;
   const baseURL = process.env.EXPO_PUBLIC_BASE_URL;
   if (!proxyURL || !baseURL) {

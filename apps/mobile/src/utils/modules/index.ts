@@ -22,9 +22,9 @@ import { DEFENSIVE } from './defensive';
 import { CONTROL } from './control';
 import { PASSIVE } from './passive';
 import { EXOTIC } from './exotic';
-import { ModuleDef } from './types';
+import { ModuleDef, RARITY_POWER_COST } from './types';
 
-/** Complete flat list of all available modules — built at startup */
+/** Complete flat list — powerCost auto-filled from rarity if not set in def */
 export const ALL_MODULE_DEFS: ModuleDef[] = [
   ...OFFENSIVE_DAMAGE,
   ...OFFENSIVE_SPEED,
@@ -33,11 +33,15 @@ export const ALL_MODULE_DEFS: ModuleDef[] = [
   ...CONTROL,
   ...PASSIVE,
   ...EXOTIC,
-];
+].map((def) => ({ ...def, powerCost: def.powerCost ?? RARITY_POWER_COST[def.rarity] }));
+
+const MOD_MAP: Record<string, ModuleDef> = Object.fromEntries(
+  ALL_MODULE_DEFS.map((m) => [m.id, m])
+);
 
 /** Look up a module definition by id */
 export function getModuleDef(id: string): ModuleDef | undefined {
-  return ALL_MODULE_DEFS.find((m) => m.id === id);
+  return MOD_MAP[id];
 }
 
 /** Get all modules usable by a specific target ('player' or TurretTypeKey) */

@@ -1,39 +1,58 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { SlotType, TurretSlot, OwnedModule, calcModuleCost, getModuleDef } from './modules';
+import {
+  SlotType,
+  TurretSlot,
+  ModuleInstance,
+  calcPowerCost,
+  getModuleDef,
+  ALL_MODULE_DEFS,
+} from './modules';
+import { DAILY_MISSION_DEFS } from './dailyMissions';
+import { openChest, LoginReward } from './loginRewards';
 
 // ─────────────────────────────────────────────────────────────
 // TYPES
 // ─────────────────────────────────────────────────────────────
 export type TurretType = 'cannon' | 'laser' | 'missile' | 'tesla';
 
-/** Module owned by the player (collection) */
-export interface PlayerModule extends OwnedModule {
-  defId: string;
-  level: number;
-}
+export const TURRET_MAX_POWER: Record<TurretType, number> = {
+  cannon: 100,
+  laser: 80,
+  missile: 120,
+  tesla: 90,
+};
 
-/** Persistent build state for a single turret */
+export const TURRET_BASE_SLOTS: Record<TurretType, SlotType[]> = {
+  cannon: ['X', 'X', 'O'],
+  laser: ['V', 'V', 'X'],
+  missile: ['X', 'X', 'E'],
+  tesla: ['C', 'C', 'X'],
+};
+
 export interface TurretBuild {
   type: TurretType;
-  level: number; // permanent level (1–20 base)
-  xp: number; // permanent XP toward next level
-  prestigeLevel: number; // resets level but adds a new slot
-  slots: TurretSlot[]; // slot[n].type = X/V/C/E/O, slot[n].moduleDefId = owned def id | null
-  maxLevel: number; // level cap before prestige (grows per prestige tier)
+  level: number;
+  xp: number;
+  prestigeLevel: number;
+  slots: TurretSlot[];
+  maxLevel: number;
+  maxPower: number;
 }
 
-// ─────────────────────────────────────────────────────────────
-// DEFAULT SLOT CONFIGURATIONS PER TURRET TYPE
-// (grows by 1 slot per prestige — user picks the new slot type)
-// ─────────────────────────────────────────────────────────────
-export const TURRET_BASE_SLOTS: Record<TurretType, SlotType[]> = {
-  cannon: ['X', 'X', 'O'], // damage + utility: 3 base slots
-  laser: ['V', 'V', 'X'], // speed + damage: 3 base slots
-  missile: ['X', 'X', 'E'], // damage + exotic: 3 base slots
-  tesla: ['C', 'C', 'X'], // control + damage: 3 base slots
-};
+export interface MissionProgress {
+  missionId: string;
+  current: number;
+  claimed: boolean;
+}
+
+export interface MapStageReward {
+  mapId: number;
+  /** '25' | '50' | '100' — health % milestone */
+  milestone: string;
+  claimed: boolean;
+}
 
 function makeTurretBuild(type: TurretType): TurretBuild {
   return {
@@ -41,31 +60,61 @@ function makeTurretBuild(type: TurretType): TurretBuild {
     level: 1,
     xp: 0,
     prestigeLevel: 0,
-    slots: TURRET_BASE_SLOTS[type].map((t) => ({ type: t, moduleDefId: null })),
+    slots: TURRET_BASE_SLOTS[type].map((t) => ({ type: t, instanceId: null })),
     maxLevel: 10,
+    maxPower: TURRET_MAX_POWER[type],
   };
 }
 
+let _iid = 1;
+export function newInstanceId(): string {
+  return `inst_${Date.now()}_${_iid++}`;
+}
+
+/** Pick 3 random mission ids without replacement */
+function pick3MissionIds(): string[] {
+  const shuffled = [...DAILY_MISSION_DEFS].sort(() => Math.random() - 0.5);
+  return shuffled.slice(0, 3).map((m) => m.id);
+}
+
 // ─────────────────────────────────────────────────────────────
-// STORE INTERFACE
+// STATE INTERFACE
 // ─────────────────────────────────────────────────────────────
 interface GameState {
-  // ── Persistent global progress ─────────────────────────────
+  // ── Persistent ──────────────────────────────────────────
   gold: number;
   prestigePoints: number;
   prestigeLevel: number;
   characterLevel: number;
   characterXp: number;
-
-  // Player module collection
-  ownedModules: PlayerModule[];
-  // Player character equipped module slot IDs (up to 8)
-  playerEquippedMods: string[]; // defIds
-
-  // Turret builds (permanent loadout between runs)
+  ownedModules: ModuleInstance[];
+  playerEquippedMods: string[];
   turretBuilds: Record<TurretType, TurretBuild>;
+  materials: Record<string, number>;
 
-  // ── In-run state (reset each run) ──────────────────────────
+  // Missions — only 3 active per day
+  activeMissionIds: string[];
+  missions: MissionProgress[]; // all 50 missions (progress persisted)
+  lastMissionRefresh: number;
+  missionCounters: Record<string, number>;
+
+  // Login rewards
+  lastLoginDate: string; // 'YYYY-MM-DD'
+  loginStreak: number;
+  loginRewardsClaimed: Record<string, boolean>; // key = 'YYYY-MM-DD'
+  currentMonthKey: string; // 'YYYY-MM' — resets when month changes
+
+  // Maps & progression
+  currentMap: number;
+  unlockedMaps: number[];
+  eliteMode: boolean;
+  stageRewards: MapStageReward[];
+
+  // Encyclopedia
+  killedEnemies: Record<string, number>; // enemyId → total kills
+  legendaryDropSeen: Record<string, boolean>; // materialId → ever dropped it
+
+  // ── In-run ──────────────────────────────────────────────
   isRunActive: boolean;
   runLevel: number;
   runXp: number;
@@ -73,48 +122,74 @@ interface GameState {
   maxRunHealth: number;
   wave: number;
 
-  // ── Actions ────────────────────────────────────────────────
-  addGold: (amount: number) => void;
-  addXp: (amount: number) => void;
+  // ── Actions ─────────────────────────────────────────────
+  addGold: (a: number) => void;
+  addXp: (a: number) => void;
+  addMaterials: (drops: Record<string, number>) => void;
   prestige: () => void;
-
   startRun: () => void;
   endRun: () => void;
   updateRunState: (
-    updates: Partial<Pick<GameState, 'runHealth' | 'maxRunHealth' | 'runLevel' | 'runXp' | 'wave'>>
+    u: Partial<Pick<GameState, 'runHealth' | 'maxRunHealth' | 'runLevel' | 'runXp' | 'wave'>>
   ) => void;
 
-  // Player module management
-  equipPlayerMod: (defId: string) => void;
-  unequipPlayerMod: (defId: string) => void;
-  upgradePlayerMod: (defId: string) => void;
-  unlockModule: (defId: string) => void; // add to collection
+  addModuleInstance: (defId: string) => ModuleInstance;
+  equipPlayerMod: (instanceId: string) => void;
+  unequipPlayerMod: (instanceId: string) => void;
+  upgradeModuleInstance: (instanceId: string) => void;
+  setTurretSlotInstance: (t: TurretType, slotIdx: number, instanceId: string | null) => void;
+  upgradeTurretSlotModule: (t: TurretType, slotIdx: number) => void;
+  addTurretXp: (t: TurretType, amount: number) => void;
+  prestigeTurret: (t: TurretType, newSlotType: SlotType) => void;
 
-  // Turret module management
-  setTurretModSlot: (turretType: TurretType, slotIndex: number, moduleDefId: string | null) => void;
-  upgradeTurretMod: (turretType: TurretType, slotIndex: number) => void;
-  addTurretXp: (turretType: TurretType, amount: number) => void;
-  prestigeTurret: (turretType: TurretType, newSlotType: SlotType) => void;
+  incrementCounter: (key: string, by?: number) => void;
+  claimMission: (missionId: string) => void;
+  refreshMissionsIfNeeded: () => void;
+
+  checkLoginReward: () => void;
+  claimLoginReward: (reward: LoginReward) => void;
+
+  setMap: (mapId: number) => void;
+  setEliteMode: (elite: boolean) => void;
+  unlockMap: (mapId: number) => void;
+  claimStageReward: (mapId: number, milestone: string) => void;
+  recordEnemyKill: (enemyId: string, count?: number) => void;
+  recordLegendaryDrop: (materialId: string) => void;
 }
 
 // ─────────────────────────────────────────────────────────────
-// INITIAL STATE
+// HELPERS
 // ─────────────────────────────────────────────────────────────
-const INITIAL_OWNED_MODULES: PlayerModule[] = [
-  { defId: 'x_base_dmg', level: 1 },
-  { defId: 'v_fire_rate', level: 1 },
-  { defId: 'x_poison', level: 1 },
-  { defId: 'o_magazine', level: 1 },
-  { defId: 'o_max_hp', level: 1 },
-  { defId: 'x_crit_chance', level: 1 },
+function todayStr(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}
+function monthKey(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${d.getMonth() + 1}`;
+}
+function dayOfMonth(): number {
+  return new Date().getDate();
+}
+
+function makeFreshMissions(): MissionProgress[] {
+  return DAILY_MISSION_DEFS.map((m) => ({ missionId: m.id, current: 0, claimed: false }));
+}
+
+const INIT_MODULES: ModuleInstance[] = [
+  { instanceId: 'inst_init_1', defId: 'x_base_dmg', level: 1 },
+  { instanceId: 'inst_init_2', defId: 'v_fire_rate', level: 1 },
+  { instanceId: 'inst_init_3', defId: 'o_max_hp', level: 1 },
+  { instanceId: 'inst_init_4', defId: 'x_crit_chance', level: 1 },
 ];
 
-const INITIAL_TURRET_BUILDS: Record<TurretType, TurretBuild> = {
-  cannon: makeTurretBuild('cannon'),
-  laser: makeTurretBuild('laser'),
-  missile: makeTurretBuild('missile'),
-  tesla: makeTurretBuild('tesla'),
-};
+function makeStageRewards(): MapStageReward[] {
+  const maps = [1, 2, 3, 4];
+  const milestones = ['25', '50', '100'];
+  return maps.flatMap((mapId) =>
+    milestones.map((milestone) => ({ mapId, milestone, claimed: false }))
+  );
+}
 
 // ─────────────────────────────────────────────────────────────
 // STORE
@@ -127,10 +202,29 @@ export const useGameStore = create<GameState>()(
       prestigeLevel: 0,
       characterLevel: 1,
       characterXp: 0,
-      ownedModules: INITIAL_OWNED_MODULES,
+      ownedModules: INIT_MODULES,
       playerEquippedMods: [],
-      turretBuilds: INITIAL_TURRET_BUILDS,
-
+      turretBuilds: {
+        cannon: makeTurretBuild('cannon'),
+        laser: makeTurretBuild('laser'),
+        missile: makeTurretBuild('missile'),
+        tesla: makeTurretBuild('tesla'),
+      },
+      materials: {},
+      activeMissionIds: pick3MissionIds(),
+      missions: makeFreshMissions(),
+      lastMissionRefresh: Date.now(),
+      missionCounters: {},
+      lastLoginDate: '',
+      loginStreak: 0,
+      loginRewardsClaimed: {},
+      currentMonthKey: monthKey(),
+      currentMap: 1,
+      unlockedMaps: [1],
+      eliteMode: false,
+      stageRewards: makeStageRewards(),
+      killedEnemies: {},
+      legendaryDropSeen: {},
       isRunActive: false,
       runLevel: 1,
       runXp: 0,
@@ -138,28 +232,32 @@ export const useGameStore = create<GameState>()(
       maxRunHealth: 100,
       wave: 0,
 
-      // ── Global ───────────────────────────────────────────
-      addGold: (amount) => set((s) => ({ gold: s.gold + amount })),
+      addGold: (a) => set((s) => ({ gold: s.gold + a })),
 
-      addXp: (amount) =>
+      addXp: (a) =>
         set((s) => {
-          const nextXp = s.characterXp + amount;
-          const threshold = s.characterLevel * 1000;
-          if (nextXp >= threshold)
-            return { characterLevel: s.characterLevel + 1, characterXp: nextXp - threshold };
-          return { characterXp: nextXp };
+          const nx = s.characterXp + a;
+          const thr = s.characterLevel * 1000;
+          if (nx >= thr) return { characterLevel: s.characterLevel + 1, characterXp: nx - thr };
+          return { characterXp: nx };
         }),
 
+      addMaterials: (drops) =>
+        set((s) => {
+          const m = { ...s.materials };
+          for (const [id, qty] of Object.entries(drops)) m[id] = (m[id] ?? 0) + qty;
+          return { materials: m };
+        }),
+
+      // Prestige — keeps everything, only resets character level
       prestige: () =>
         set((s) => ({
           prestigeLevel: s.prestigeLevel + 1,
-          prestigePoints: s.prestigePoints + s.characterLevel * 10,
+          prestigePoints: s.prestigePoints + 50,
           characterLevel: 1,
           characterXp: 0,
-          gold: 100,
         })),
 
-      // ── Run ──────────────────────────────────────────────
       startRun: () =>
         set({
           isRunActive: true,
@@ -169,107 +267,102 @@ export const useGameStore = create<GameState>()(
           maxRunHealth: 100,
           wave: 1,
         }),
-
       endRun: () => set({ isRunActive: false }),
+      updateRunState: (u) => set((s) => ({ ...s, ...u })),
 
-      updateRunState: (updates) => set((s) => ({ ...s, ...updates })),
-
-      // ── Player modules ───────────────────────────────────
-      unlockModule: (defId) =>
+      // ── Module instances ─────────────────────────────────
+      addModuleInstance: (defId: string) => {
+        const inst: ModuleInstance = { instanceId: newInstanceId(), defId, level: 1 };
+        set((s) => ({ ownedModules: [...s.ownedModules, inst] }));
+        return inst;
+      },
+      equipPlayerMod: (instanceId) =>
         set((s) => {
-          if (s.ownedModules.some((m) => m.defId === defId)) return s;
-          return { ownedModules: [...s.ownedModules, { defId, level: 1 }] };
+          if (s.playerEquippedMods.length >= 8 || s.playerEquippedMods.includes(instanceId))
+            return s;
+          return { playerEquippedMods: [...s.playerEquippedMods, instanceId] };
         }),
-
-      equipPlayerMod: (defId) =>
+      unequipPlayerMod: (instanceId) =>
+        set((s) => ({
+          playerEquippedMods: s.playerEquippedMods.filter((id) => id !== instanceId),
+        })),
+      upgradeModuleInstance: (instanceId) =>
         set((s) => {
-          if (s.playerEquippedMods.length >= 8 || s.playerEquippedMods.includes(defId)) return s;
-          return { playerEquippedMods: [...s.playerEquippedMods, defId] };
-        }),
-
-      unequipPlayerMod: (defId) =>
-        set((s) => ({ playerEquippedMods: s.playerEquippedMods.filter((id) => id !== defId) })),
-
-      upgradePlayerMod: (defId) =>
-        set((s) => {
-          const owned = s.ownedModules.find((m) => m.defId === defId);
-          const def = getModuleDef(defId);
-          if (!owned || !def) return s;
-          if (owned.level >= def.maxLevel) return s;
-          const cost = calcModuleCost(def, owned.level + 1, null);
+          const inst = s.ownedModules.find((m) => m.instanceId === instanceId);
+          const def = inst ? getModuleDef(inst.defId) : null;
+          if (!inst || !def || inst.level >= def.maxLevel) return s;
+          const cost = def.baseCost + def.costPerLevel * inst.level;
           if (s.gold < cost) return s;
           return {
             gold: s.gold - cost,
             ownedModules: s.ownedModules.map((m) =>
-              m.defId === defId ? { ...m, level: m.level + 1 } : m
+              m.instanceId === instanceId ? { ...m, level: m.level + 1 } : m
             ),
           };
         }),
 
-      // ── Turret modules ───────────────────────────────────
-      setTurretModSlot: (turretType, slotIndex, moduleDefId) =>
+      // ── Turret modules ─────────────────────────────────
+      setTurretSlotInstance: (turretType, slotIndex, instanceId) =>
         set((s) => {
           const build = s.turretBuilds[turretType];
           if (slotIndex >= build.slots.length) return s;
-          const newSlots = [...build.slots];
-          newSlots[slotIndex] = { ...newSlots[slotIndex], moduleDefId };
+          if (instanceId !== null) {
+            const inst = s.ownedModules.find((m) => m.instanceId === instanceId);
+            const def = inst ? getModuleDef(inst.defId) : null;
+            if (!def) return s;
+            const slot = build.slots[slotIndex];
+            const newPower = calcPowerCost(def, slot.type);
+            const usedPower = build.slots.reduce((acc, sl, i) => {
+              if (i === slotIndex || !sl.instanceId) return acc;
+              const si = s.ownedModules.find((m) => m.instanceId === sl.instanceId);
+              const sd = si ? getModuleDef(si.defId) : null;
+              return acc + (sd ? calcPowerCost(sd, sl.type) : 0);
+            }, 0);
+            if (usedPower + newPower > build.maxPower) return s;
+          }
+          const newSlots = build.slots.map((sl, i) =>
+            i === slotIndex ? { ...sl, instanceId } : sl
+          );
           return {
-            turretBuilds: {
-              ...s.turretBuilds,
-              [turretType]: { ...build, slots: newSlots },
-            },
+            turretBuilds: { ...s.turretBuilds, [turretType]: { ...build, slots: newSlots } },
           };
         }),
-
-      upgradeTurretMod: (turretType, slotIndex) =>
+      upgradeTurretSlotModule: (turretType, slotIndex) =>
         set((s) => {
           const build = s.turretBuilds[turretType];
           const slot = build.slots[slotIndex];
-          if (!slot || !slot.moduleDefId) return s;
-
-          const defId = slot.moduleDefId;
-          const def = getModuleDef(defId);
-          const owned = s.ownedModules.find((m) => m.defId === defId);
-          if (!def || !owned) return s;
-          if (owned.level >= def.maxLevel) return s;
-
-          const cost = calcModuleCost(def, owned.level + 1, slot.type);
+          if (!slot?.instanceId) return s;
+          const inst = s.ownedModules.find((m) => m.instanceId === slot.instanceId);
+          const def = inst ? getModuleDef(inst.defId) : null;
+          if (!inst || !def || inst.level >= def.maxLevel) return s;
+          const cost = def.baseCost + def.costPerLevel * inst.level;
           if (s.gold < cost) return s;
-
           return {
             gold: s.gold - cost,
             ownedModules: s.ownedModules.map((m) =>
-              m.defId === defId ? { ...m, level: m.level + 1 } : m
+              m.instanceId === slot.instanceId ? { ...m, level: m.level + 1 } : m
             ),
           };
         }),
-
       addTurretXp: (turretType, amount) =>
         set((s) => {
           const build = s.turretBuilds[turretType];
-          const nextXp = build.xp + amount;
-          const threshold = build.level * 200;
-          if (nextXp >= threshold && build.level < build.maxLevel) {
+          const nx = build.xp + amount;
+          const thr = build.level * 200;
+          if (nx >= thr && build.level < build.maxLevel)
             return {
               turretBuilds: {
                 ...s.turretBuilds,
-                [turretType]: { ...build, level: build.level + 1, xp: nextXp - threshold },
+                [turretType]: { ...build, level: build.level + 1, xp: nx - thr },
               },
             };
-          }
-          return {
-            turretBuilds: {
-              ...s.turretBuilds,
-              [turretType]: { ...build, xp: nextXp },
-            },
-          };
+          return { turretBuilds: { ...s.turretBuilds, [turretType]: { ...build, xp: nx } } };
         }),
-
       prestigeTurret: (turretType, newSlotType) =>
         set((s) => {
           const build = s.turretBuilds[turretType];
-          if (build.level < build.maxLevel) return s; // must be at max level
-          const newSlot: TurretSlot = { type: newSlotType, moduleDefId: null };
+          if (build.level < build.maxLevel) return s;
+          const newSlot: TurretSlot = { type: newSlotType, instanceId: null };
           return {
             turretBuilds: {
               ...s.turretBuilds,
@@ -279,14 +372,135 @@ export const useGameStore = create<GameState>()(
                 xp: 0,
                 prestigeLevel: build.prestigeLevel + 1,
                 maxLevel: build.maxLevel + 5,
+                maxPower: build.maxPower + 20,
                 slots: [...build.slots, newSlot],
               },
             },
           };
         }),
+
+      // ── Missions (3 active per day) ────────────────────
+      incrementCounter: (key, by = 1) =>
+        set((s) => {
+          const counters = { ...s.missionCounters, [key]: (s.missionCounters[key] ?? 0) + by };
+          const missions = s.missions.map((mp) => {
+            if (mp.claimed) return mp;
+            const def = DAILY_MISSION_DEFS.find((d) => d.id === mp.missionId);
+            if (!def || def.counterKey !== key) return mp;
+            return { ...mp, current: Math.min(counters[key] ?? 0, def.target) };
+          });
+          return { missionCounters: counters, missions };
+        }),
+      claimMission: (missionId) =>
+        set((s) => {
+          const def = DAILY_MISSION_DEFS.find((d) => d.id === missionId);
+          const mp = s.missions.find((m) => m.missionId === missionId);
+          if (!def || !mp || mp.claimed || mp.current < def.target) return s;
+          const mats = { ...s.materials };
+          if (def.materialReward)
+            mats[def.materialReward.materialId] =
+              (mats[def.materialReward.materialId] ?? 0) + def.materialReward.qty;
+          return {
+            gold: s.gold + def.goldReward,
+            missions: s.missions.map((m) =>
+              m.missionId === missionId ? { ...m, claimed: true } : m
+            ),
+            materials: mats,
+          };
+        }),
+      refreshMissionsIfNeeded: () =>
+        set((s) => {
+          const sameDay =
+            new Date(Date.now()).toDateString() === new Date(s.lastMissionRefresh).toDateString();
+          if (sameDay) return s;
+          // New day → pick 3 fresh random missions
+          return {
+            activeMissionIds: pick3MissionIds(),
+            missions: makeFreshMissions(),
+            lastMissionRefresh: Date.now(),
+          };
+        }),
+
+      // ── Login rewards ──────────────────────────────────
+      checkLoginReward: () =>
+        set((s) => {
+          const today = todayStr();
+          const mk = monthKey();
+          if (s.lastLoginDate === today) return s; // already checked today
+          // Reset if new month
+          const loginRewardsClaimed = mk !== s.currentMonthKey ? {} : { ...s.loginRewardsClaimed };
+          const streak = s.lastLoginDate === '' ? 1 : s.loginStreak + 1;
+          return {
+            lastLoginDate: today,
+            loginStreak: streak,
+            currentMonthKey: mk,
+            loginRewardsClaimed,
+          };
+        }),
+      claimLoginReward: (reward: LoginReward) =>
+        set((s) => {
+          const key = `${s.currentMonthKey}-d${reward.day}`;
+          if (s.loginRewardsClaimed[key]) return s;
+          const mats = { ...s.materials };
+          let gold = s.gold;
+          if (reward.goldAmount) gold += reward.goldAmount;
+          if (reward.type === 'material' && reward.materialId) {
+            mats[reward.materialId] = (mats[reward.materialId] ?? 0) + (reward.materialQty ?? 1);
+          }
+          if (
+            reward.type === 'chest_basic' ||
+            reward.type === 'chest_epic' ||
+            reward.type === 'chest_legendary'
+          ) {
+            const { materialIds, gold: chestGold } = openChest(reward);
+            gold += chestGold;
+            for (const matId of materialIds) mats[matId] = (mats[matId] ?? 0) + 1;
+          }
+          return {
+            gold,
+            materials: mats,
+            loginRewardsClaimed: { ...s.loginRewardsClaimed, [key]: true },
+          };
+        }),
+
+      // ── Maps ──────────────────────────────────────────
+      setMap: (mapId) => set({ currentMap: mapId }),
+      setEliteMode: (elite) => set({ eliteMode: elite }),
+      unlockMap: (mapId) =>
+        set((s) => ({
+          unlockedMaps: s.unlockedMaps.includes(mapId)
+            ? s.unlockedMaps
+            : [...s.unlockedMaps, mapId],
+        })),
+      claimStageReward: (mapId, milestone) =>
+        set((s) => {
+          const entry = s.stageRewards.find((r) => r.mapId === mapId && r.milestone === milestone);
+          if (!entry || entry.claimed) return s;
+          const mats = { ...s.materials };
+          // Chest reward: give some materials based on milestone
+          const matAmt = milestone === '100' ? 3 : milestone === '50' ? 2 : 1;
+          mats['plasma_core'] = (mats['plasma_core'] ?? 0) + matAmt;
+          return {
+            stageRewards: s.stageRewards.map((r) =>
+              r.mapId === mapId && r.milestone === milestone ? { ...r, claimed: true } : r
+            ),
+            materials: mats,
+            gold: s.gold + (milestone === '100' ? 400 : milestone === '50' ? 200 : 100),
+          };
+        }),
+
+      // ── Encyclopedia ──────────────────────────────────
+      recordEnemyKill: (enemyId, count = 1) =>
+        set((s) => ({
+          killedEnemies: { ...s.killedEnemies, [enemyId]: (s.killedEnemies[enemyId] ?? 0) + count },
+        })),
+      recordLegendaryDrop: (materialId) =>
+        set((s) => ({
+          legendaryDropSeen: { ...s.legendaryDropSeen, [materialId]: true },
+        })),
     }),
     {
-      name: 'planet-defense-v3',
+      name: 'planet-defense-v5',
       storage: createJSONStorage(() => AsyncStorage),
       partialize: (s) => ({
         gold: s.gold,
@@ -297,7 +511,40 @@ export const useGameStore = create<GameState>()(
         ownedModules: s.ownedModules,
         playerEquippedMods: s.playerEquippedMods,
         turretBuilds: s.turretBuilds,
+        materials: s.materials,
+        activeMissionIds: s.activeMissionIds,
+        missions: s.missions,
+        lastMissionRefresh: s.lastMissionRefresh,
+        missionCounters: s.missionCounters,
+        lastLoginDate: s.lastLoginDate,
+        loginStreak: s.loginStreak,
+        loginRewardsClaimed: s.loginRewardsClaimed,
+        currentMonthKey: s.currentMonthKey,
+        currentMap: s.currentMap,
+        unlockedMaps: s.unlockedMaps,
+        eliteMode: s.eliteMode,
+        stageRewards: s.stageRewards,
+        killedEnemies: s.killedEnemies,
+        legendaryDropSeen: s.legendaryDropSeen,
       }),
     }
   )
 );
+
+// ── Pure helpers ─────────────────────────────────────────────
+export function getUsedPower(build: TurretBuild, owned: ModuleInstance[]): number {
+  return build.slots.reduce((acc, slot) => {
+    if (!slot.instanceId) return acc;
+    const inst = owned.find((m) => m.instanceId === slot.instanceId);
+    const def = inst ? getModuleDef(inst.defId) : null;
+    return acc + (def ? calcPowerCost(def, slot.type) : 0);
+  }, 0);
+}
+
+export function rollModuleDrop(): string {
+  const weighted = ALL_MODULE_DEFS.flatMap((d) => {
+    const w = d.rarity === 'common' ? 60 : d.rarity === 'rare' ? 28 : d.rarity === 'epic' ? 10 : 2;
+    return Array<string>(w).fill(d.id);
+  });
+  return weighted[Math.floor(Math.random() * weighted.length)];
+}
